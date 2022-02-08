@@ -40,6 +40,7 @@ type Limiter interface {
 // Clock is the minimum necessary interface to instantiate a rate limiter with
 // a clock or mock clock, compatible with clocks created using
 // github.com/andres-erbsen/clock.
+// 这个项目只用到了/andres-erbsen/clock的2个method，如果clock.New()相当于继承了这个Clock
 type Clock interface {
 	Now() time.Time
 	Sleep(time.Duration)
@@ -58,6 +59,7 @@ func New(rate int, opts ...Option) Limiter {
 }
 
 // buildConfig combines defaults with options.
+// 先生成默认的config，然后建造者模式
 func buildConfig(opts []Option) config {
 	c := config{
 		clock: clock.New(),

@@ -24,6 +24,7 @@ type testRunner interface {
 	afterFunc(d time.Duration, fn func())
 }
 
+// 一个runnerImpl只能生成一种limiter，但是可以生成多个
 type runnerImpl struct {
 	t *testing.T
 
@@ -38,6 +39,7 @@ type runnerImpl struct {
 }
 
 func runTest(t *testing.T, fn func(testRunner)) {
+	// 匿名struct
 	impls := []struct {
 		name        string
 		constructor func(int, ...Option) Limiter
@@ -48,18 +50,19 @@ func runTest(t *testing.T, fn func(testRunner)) {
 				return newMutexBased(rate, opts...)
 			},
 		},
-		{
-			name: "atomic",
-			constructor: func(rate int, opts ...Option) Limiter {
-				return newAtomicBased(rate, opts...)
-			},
-		},
+		//{
+		//	name: "atomic",
+		//	constructor: func(rate int, opts ...Option) Limiter {
+		//		return newAtomicBased(rate, opts...)
+		//	},
+		//},
 	}
 
 	for _, tt := range impls {
 		t.Run(tt.name, func(t *testing.T) {
 			r := runnerImpl{
-				t:           t,
+				t: t,
+				//测试过程使用的是mock timer
 				clock:       clock.NewMock(),
 				constructor: tt.constructor,
 				doneCh:      make(chan struct{}),
@@ -75,6 +78,7 @@ func runTest(t *testing.T, fn func(testRunner)) {
 
 // createLimiter builds a limiter with given options.
 func (r *runnerImpl) createLimiter(rate int, opts ...Option) Limiter {
+	// r中的clock是mock的，测试过程使用的是mock timer
 	opts = append(opts, WithClock(r.clock))
 	return r.constructor(rate, opts...)
 }
@@ -83,6 +87,7 @@ func (r *runnerImpl) createLimiter(rate int, opts ...Option) Limiter {
 func (r *runnerImpl) startTaking(rls ...Limiter) {
 	r.goWait(func() {
 		for {
+			// 一个runnerImpl可以使用多个limiter
 			for _, rl := range rls {
 				rl.Take()
 			}
@@ -122,6 +127,8 @@ func (r *runnerImpl) afterFunc(d time.Duration, fn func()) {
 }
 
 // goWait runs a function in a goroutine and makes sure the gouritine was scheduled.
+// 新启动一个goroutine，执行fn
+// runnerImpl中有个wg，这里新定义了一个wg
 func (r *runnerImpl) goWait(fn func()) {
 	wg := sync.WaitGroup{}
 	wg.Add(1)
@@ -146,6 +153,7 @@ func TestRateLimiter(t *testing.T) {
 		rl := r.createLimiter(100, WithoutSlack)
 
 		// Create copious counts concurrently.
+		// 模拟4个并发请求
 		r.startTaking(rl)
 		r.startTaking(rl)
 		r.startTaking(rl)
@@ -221,6 +229,8 @@ func TestSlack(t *testing.T) {
 		{
 			msg: "slack of 20",
 			opt: []Option{WithSlack(20)},
+			// 前2秒，fast limiter taken了20次（和slow一样），根据t.sleepFor += t.perRequest - now.Sub(t.last)。 t.sleepFor = perRequest（10ms） * 20 - 2000 ms >> 200 ms的maxSlack
+			// 最后1秒，只有新协程的fast在执行，slow/fast组合阻塞了
 			// 2*10 + 1*100 + 1*20 (slack)
 			want: 140,
 		},
@@ -230,6 +240,13 @@ func TestSlack(t *testing.T) {
 			opt: []Option{WithSlack(150)},
 			// 2*10 + 1*100 + 1*150 (slack)
 			want: 270,
+		},
+		{
+			// 我添加的，slack设置为200，maxSlack为-2000，但是可以达到的最小值为-1800
+			msg: "slack of 200",
+			opt: []Option{WithSlack(200)},
+			// 2*10 + 1*100 + 1*180 (slack)
+			want: 300,
 		},
 		{
 			msg: "no option, defaults to 10, with per",
@@ -259,11 +276,13 @@ func TestSlack(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		// 这里用了t.Run，在runTest内部，也使用了t.Run？两个层面
 		t.Run(tt.msg, func(t *testing.T) {
 			runTest(t, func(r testRunner) {
 				slow := r.createLimiter(10, WithoutSlack)
 				fast := r.createLimiter(100, tt.opt...)
 
+				// 如果使用mock timer, startTaking不会改变count的值，在afterFunc后才会改变，因为afterFunc中有clock.Add
 				r.startTaking(slow, fast)
 
 				r.afterFunc(2*time.Second, func() {
@@ -272,6 +291,7 @@ func TestSlack(t *testing.T) {
 				})
 
 				// limiter with 10hz dominates here - we're always at 10.
+				// 这里的1秒是从启动时间开始算起，与上文2秒开始不冲突
 				r.assertCountAt(1*time.Second, 10)
 				r.assertCountAt(3*time.Second, tt.want)
 			})
